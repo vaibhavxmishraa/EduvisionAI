@@ -1,0 +1,38 @@
+STREAMING_CHUNK:Configuring repository ignore rules...
+
+Python Byte-code & Caches
+
+pycache/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+SQLite Database
+
+*.db
+*.sqlite3
+
+Excel Exports & Local Media Output
+
+*.xlsx
+*.csv
+output/
+
+Virtual Environments
+
+venv/
+.venv/
+env/
+ENV/
+
+Environment Variables & Keys
+
+.env
+.env.local
+
+IDE Settings
+
+.vscode/
+.idea/
+.DS_Store
