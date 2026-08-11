@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-zinc-50">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EduvisionAI - Smart CCTV Attendance</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Plus Jakarta Sans', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#ecfdf5',
+                            100: '#d1fae5',
+                            500: '#10b981',
+                            600: '#059669',
+                            700: '#047857',
+                            900: '#064e3b',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { font-family: 'Plus Jakarta Sans', sans-serif; }
+        .toast-slide { animation: slideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        @keyframes slideIn { 
+            from { transform: translateY(-20px) scale(0.95); opacity: 0; } 
+            to { transform: translateY(0) scale(1); opacity: 1; } 
+        }
+    </style>
+</head>
+<body class="h-full w-full overflow-hidden text-zinc-800 bg-zinc-100 flex flex-col">
+
+    <div id="toast-container" class="fixed top-6 right-6 z-50 flex flex-col space-y-3 max-w-md w-full pointer-events-none"></div>
+
+    <div id="login-view" class="w-full h-full flex items-center justify-center bg-gradient-to-br from-zinc-900 via-zinc-800 to-emerald-950 absolute inset-0 z-40 p-4">
+        <div class="bg-white/95 backdrop-blur-xl p-8 sm:p-10 rounded-3xl shadow-2xl w-full max-w-md border border-white/20 transition-all">
+            <div class="text-center mb-8">
+                <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-emerald-100 text-emerald-700 font-bold text-2xl mb-3 shadow-inner">
+                    👁️
+                </div>
+                <h1 class="text-3xl font-extrabold text-zinc-900 tracking-tight">Eduvision<span class="text-emerald-600">AI</span></h1>
+                <p class="text-xs font-semibold tracking-wider text-emerald-800 uppercase mt-1">Developed by Tensor Titans</p>
+            </div>
+            
+            <form id="login-form" class="space-y-5">
+                <div>
+                    <label class="block text-xs font-bold uppercase tracking-wider text-zinc-600 mb-1">Username</label>
+                    <input type="text" id="username" class="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none transition font-medium text-zinc-800" placeholder="admin / teacher / parent" required>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase tracking-wider text-zinc-600 mb-1">Password</label>
+                    <input type="password" id="password" class="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none transition font-medium text-zinc-800" placeholder="••••••••" required>
+                </div>
+                <button type="submit" class="w-full bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-emerald-600/30 transition transform active:scale-95 flex items-center justify-center space-x-2">
+                    <span>Sign In to Dashboard</span>
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+                </button>
+            </form>
+            <div class="mt-6 p-3 rounded-xl bg-emerald-50/60 border border-emerald-100 text-xs text-emerald-900 text-center font-medium">
+                🔑 Default logins: <span class="font-bold">admin</span>, <span class="font-bold">teacher</span>, or <span class="font-bold">parent</span> (Pass: <span class="font-bold">password</span>)
+            </div>
+        </div>
+    </div>
+
+    <div id="app-view" class="hidden w-full h-full flex flex-col md:flex-row overflow-hidden">
+        <aside class="w-full md:w-72 bg-zinc-900 text-zinc-100 flex flex-col shadow-2xl z-20 shrink-0">
+            <div class="p-6 border-b border-zinc-800 flex items-center justify-between">
+                <div>
+                    <h1 class="text-2xl font-black tracking-tight text-white">Eduvision<span class="text-emerald-400">AI</span></h1>
+                    <p class="text-[10px] font-bold text-emerald-500 tracking-widest uppercase">Tensor Titans Edition</p>
+                </div>
+                <span id="user-role-badge" class="px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide bg-emerald-500/20 text-emerald-400 rounded-full border border-emerald-500/30"></span>
+            </div>
+            
+            <nav id="nav-menu" class="flex-1 p-4 space-y-2 overflow-y-auto"></nav>
+
+            <div class="p-4 border-t border-zinc-800/80 bg-zinc-950/50">
+                <div class="flex items-center justify-between px-3 py-2 mb-2">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center font-bold text-white text-xs">
+                            <span id="user-avatar">U</span>
+                        </div>
+                        <div>
+                            <p id="user-name-display" class="text-xs font-bold text-zinc-200">User</p>
+                            <p id="user-role-sub" class="text-[10px] text-zinc-400">Active Session</p>
+                        </div>
+                    </div>
+                </div>
+                <button onclick="logout()" class="w-full flex items-center justify-center space-x-2 px-4 py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-xl font-medium text-xs transition border border-rose-500/20">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+                    <span>Sign Out</span>
+                </button>
+            </div>
+        </aside>
+
+        <main class="flex-1 overflow-y-auto bg-zinc-100 p-4 sm:p-8" id="main-content"></main>
+    </div>
+
+    <script>
+        const API_URL = window.location.origin.includes('127.0.0.1') || window.location.origin.includes('localhost')
+            ? "http://127.0.0.1:8000/api" 
+            : window.location.origin + "/api";
+
+        let currentUser = null;
+        let cctvPollingInterval = null;
+        let knownRecentLogs = new Set();
+
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            
+            let bgStyle = 'bg-emerald-600 text-white shadow-emerald-900/20';
+            if (type === 'error') bgStyle = 'bg-rose-600 text-white shadow-rose-900/20';
+            if (type === 'ai-match') bgStyle = 'bg-gradient-to-r from-emerald-600 to-teal-700 text-white shadow-emerald-900/30';
+            
+            toast.className = `toast-slide pointer-events-auto ${bgStyle} p-4 rounded-2xl shadow-xl font-medium flex items-center justify-between border border-white/20`;
+            
+            toast.innerHTML = `
+                <div class="flex items-center space-x-3">
+                    ${type === 'ai-match' ? '<span class="text-xl animate-bounce">⚡</span>' : ''}
+                    <span class="text-sm font-semibold">${message}</span>
+                </div>
+                <button onclick="this.parentElement.remove()" class="text-white/70 hover:text-white ml-4 text-xs font-bold">✕</button>
+            `;
+            
+            container.appendChild(toast);
+            setTimeout(() => {
+                if (toast.parentElement) {
+                    toast.style.opacity = '0';
+                    toast.style.transform = 'translateY(-10px)';
+                    toast.style.transition = 'all 0.3s ease';
+                    setTimeout(() => toast.remove(), 300);
+                }
+            }, 4500);
+        }
+
+        document.getElementById('login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const u = document.getElementById('username').value;
+            const p = document.getElementById('password').value;
+            
+            try {
+                const res = await fetch(`${API_URL}/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: u, password: p })
+                });
+                if (!res.ok) throw new Error("Invalid Username or Password");
+                
+                currentUser = await res.json();
+                document.getElementById('login-view').classList.add('hidden');
+                document.getElementById('app-view').classList.remove('hidden');
+                
+                document.getElementById('user-role-badge').innerText = currentUser.role;
+                document.getElementById('user-name-display').innerText = currentUser.username;
+                document.getElementById('user-avatar').innerText = currentUser.username.charAt(0).toUpperCase();
+                document.getElementById('user-role-sub').innerText = `${currentUser.role} Level`;
+                
+                renderSidebar();
+                loadDefaultView();
+                showToast(`Welcome to EduvisionAI, ${currentUser.username}!`);
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+        });
+
+        function logout() {
+            currentUser = null;
+            if(cctvPollingInterval) clearInterval(cctvPollingInterval);
+            document.getElementById('app-view').classList.add('hidden');
+            document.getElementById('login-view').classList.remove('hidden');
+            document.getElementById('password').value = '';
+        }
+
+        function renderSidebar() {
+            const nav = document.getElementById('nav-menu');
+            nav.innerHTML = '';
+            
+            const makeLink = (text, viewName, icon) => `
+                <button onclick="renderView('${viewName}')" class="w-full flex items-center px-4 py-3 text-zinc-300 hover:bg-zinc-800 hover:text-emerald-400 rounded-xl transition font-semibold text-sm group">
+                    <span class="mr-3 text-lg group-hover:scale-110 transition-transform">${icon}</span> 
+                    <span>${text}</span>
+                </button>`;
+
+            if (currentUser.role === 'Admin') {
+                nav.innerHTML += makeLink('CCTV Live Stream', 'admin_cctv', '🎥');
+                nav.innerHTML += makeLink('Enroll Student Face', 'admin_enroll', '📸');
+                nav.innerHTML += makeLink('Export Excel Reports', 'export_reports', '📊');
+            } else if (currentUser.role === 'Teacher') {
+                nav.innerHTML += makeLink('Classroom Roster', 'teacher_roster', '📋');
+                nav.innerHTML += makeLink('Export Reports', 'export_reports', '📊');
+            } else if (currentUser.role === 'Parent') {
+                nav.innerHTML += makeLink('Child Attendance Log', 'parent_timeline', '👶');
+            }
+        }
+
+        function loadDefaultView() {
+            if (currentUser.role === 'Admin') renderView('admin_cctv');
+            if (currentUser.role === 'Teacher') renderView('teacher_roster');
+            if (currentUser.role === 'Parent') renderView('parent_timeline');
+        }
+
+        function renderView(viewName) {
+            const main = document.getElementById('main-content');
+            if(cctvPollingInterval) { clearInterval(cctvPollingInterval); cctvPollingInterval = null; }
+
+            if (viewName === 'admin_cctv') {
+                main.innerHTML = `
+                    <div class="max-w-6xl mx-auto space-y-6">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-zinc-200/80">
+                            <div>
+                                <h2 class="text-2xl font-bold text-zinc-900">Real-World Classroom CCTV Feed</h2>
+                                <p class="text-xs text-zinc-500 mt-1">Multi-face simultaneous detection engine powered by Tensor Titans AI</p>
+                            </div>
+                            <div class="flex items-center space-x-3 self-start sm:self-auto">
+                                <span class="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                    <span class="w-2 h-2 mr-2 bg-emerald-500 rounded-full animate-ping"></span>
+                                    AI Scanning Active
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <div class="lg:col-span-2 bg-zinc-900 rounded-3xl overflow-hidden shadow-xl border-4 border-zinc-800 relative min-h-[420px] flex items-center justify-center">
+                                <img src="${API_URL}/camera/stream" class="w-full h-full object-cover" onerror="this.onerror=null; this.src='https://placehold.co/800x600/18181b/10b981?text=CCTV+Stream+Offline+or+Simulating';">
+                                <div class="absolute top-4 left-4 bg-zinc-950/80 backdrop-blur-md text-emerald-400 px-3 py-1.5 rounded-xl text-xs font-mono border border-zinc-800 flex items-center space-x-2">
+                                    <span class="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>
+                                    <span>CAM-CLASSROOM-01 [LIVE HD]</span>
+                                </div>
+                            </div>
+
+                            <div class="bg-white p-6 rounded-3xl shadow-sm border border-zinc-200/80 flex flex-col h-[480px]">
+                                <h3 class="font-bold text-zinc-900 text-base mb-1">Instant Match Stream</h3>
+                                <p class="text-xs text-zinc-500 mb-4">Logged detections in this session</p>
+                                <div id="live-match-list" class="flex-1 overflow-y-auto space-y-3 pr-1">
+                                    <p class="text-xs text-zinc-400 text-center py-8">Waiting for classroom detection events...</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                cctvPollingInterval = setInterval(pollRecentLogs, 2000);
+            }
+            
+            else if (viewName === 'admin_enroll') {
+                main.innerHTML = `
+                    <div class="max-w-2xl mx-auto bg-white p-8 rounded-3xl shadow-sm border border-zinc-200/80">
+                        <div class="mb-6">
+                            <h2 class="text-2xl font-bold text-zinc-900">Student Face Enrollment</h2>
+                            <p class="text-xs text-zinc-500 mt-1">Capture high-resolution face vectors for instant multi-face recognition</p>
+                        </div>
+                        <div class="space-y-5">
+                            <div>
+                                <label class="block text-xs font-bold uppercase tracking-wider text-zinc-600 mb-1">Select Student ID</label>
+                                <input type="number" id="enroll-id" value="1" class="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none font-semibold text-zinc-800">
+                            </div>
+                            <div class="aspect-video bg-zinc-900 rounded-2xl overflow-hidden border-2 border-dashed border-zinc-300 relative flex items-center justify-center shadow-inner">
+                                <video id="webcam-video" autoplay playsinline class="w-full h-full object-cover"></video>
+                            </div>
+                            <button onclick="captureAndEnroll()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-emerald-600/20 transition active:scale-95 flex items-center justify-center space-x-2">
+                                <span>📸 Capture & Save Face Vector</span>
+                            </button>
+                            <canvas id="enroll-canvas" class="hidden"></canvas>
+                        </div>
+                    </div>
+                `;
+                initWebcam();
+            }
+
+            else if (viewName === 'export_reports') {
+                main.innerHTML = `
+                    <div class="max-w-xl mx-auto mt-12 text-center bg-white p-10 rounded-3xl shadow-sm border border-zinc-200/80">
+                        <div class="w-20 h-20 bg-emerald-100 text-emerald-700 rounded-3xl flex items-center justify-center text-4xl mx-auto mb-5 shadow-inner">
+                            📊
+                        </div>
+                        <h2 class="text-2xl font-bold text-zinc-900 mb-2">Generate Attendance Excel Report</h2>
+                        <p class="text-xs text-zinc-500 mb-8 max-w-md mx-auto">Download structured Excel sheets containing Morning Check-In, Evening Check-Out, and overall percentage calculations.</p>
+                        <a href="${API_URL}/export" download class="inline-flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3.5 px-8 rounded-xl shadow-lg shadow-emerald-600/30 transition active:scale-95">
+                            <span>Download Full Excel File (.xlsx)</span>
+                        </a>
+                    </div>
+                `;
+            }
+
+            else if (viewName === 'teacher_roster') {
+                main.innerHTML = `
+                    <div class="max-w-5xl mx-auto space-y-6">
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <h2 class="text-2xl font-bold text-zinc-900">Classroom Roster & Manual Override</h2>
+                                <p class="text-xs text-zinc-500 mt-1">Teacher management portal for manual check-ins</p>
+                            </div>
+                        </div>
+                        <div id="roster-list" class="space-y-3">
+                            <p class="text-xs text-zinc-400">Loading student roster...</p>
+                        </div>
+                    </div>
+                `;
+                loadTeacherRoster();
+            }
+
+            else if (viewName === 'parent_timeline') {
+                main.innerHTML = `<div class="max-w-3xl mx-auto" id="parent-content">Loading child details...</div>`;
+                loadParentDashboard();
+            }
+        }
+
+        async function pollRecentLogs() {
+            try {
+                const res = await fetch(`${API_URL}/attendance/recent`);
+                if(res.ok) {
+                    const logs = await res.json();
+                    const listContainer = document.getElementById('live-match-list');
+                    if (logs.length > 0 && listContainer) {
+                        listContainer.innerHTML = logs.map(log => `
+                            <div class="p-3 bg-emerald-50/80 border border-emerald-200/60 rounded-xl flex items-center justify-between">
+                                <div>
+                                    <p class="text-xs font-bold text-emerald-950">${log.name}</p>
+                                    <p class="text-[10px] text-emerald-700 font-medium">${log.session}</p>
+                                </div>
+                                <span class="text-[10px] font-mono font-bold text-emerald-800 bg-emerald-200/60 px-2 py-0.5 rounded-md">${log.time}</span>
+                            </div>
+                        `).join('');
+                    }
+                    
+                    logs.forEach(log => {
+                        const uniqueId = `${log.name}-${log.session}-${log.time}`;
+                        if(!knownRecentLogs.has(uniqueId)) {
+                            knownRecentLogs.add(uniqueId);
+                            showToast(`AI Detection: ${log.name} (${log.session})`, 'ai-match');
+                        }
+                    });
+                }
+            } catch (e) {}
+        }
+
+        let currentStream;
+        async function initWebcam() {
+            try {
+                const video = document.getElementById('webcam-video');
+                currentStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = currentStream;
+            } catch (err) {
+                showToast("Camera access unavailable on this device", "error");
+            }
+        }
+
+        async function captureAndEnroll() {
+            const video = document.getElementById('webcam-video');
+            const canvas = document.getElementById('enroll-canvas');
+            const studentId = document.getElementById('enroll-id').value;
+            
+            if(!video.videoWidth) {
+                showToast("Webcam is not ready yet.", "error");
+                return;
+            }
+
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0);
+            const base64Img = canvas.toDataURL('image/jpeg');
+            
+            try {
+                const res = await fetch(`${API_URL}/admin/enroll`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ student_id: parseInt(studentId), image_base64: base64Img })
+                });
+                const data = await res.json();
+                if(res.ok) showToast(data.msg, 'success');
+                else showToast(data.detail, 'error');
+            } catch (e) {
+                showToast("Network Error", "error");
+            }
+        }
+
+        async function loadTeacherRoster() {
+            try {
+                const res = await fetch(`${API_URL}/teacher/students`);
+                const students = await res.json();
+                
+                const html = students.map(s => `
+                    <div class="bg-white p-5 rounded-2xl shadow-sm border border-zinc-200/80 flex items-center justify-between">
+                        <div>
+                            <h3 class="font-bold text-zinc-900">${s.name} <span class="text-xs text-zinc-400 font-semibold ml-2">#${s.roll}</span></h3>
+                            <p class="text-xs text-zinc-500">Section: ${s.class}</p>
+                        </div>
+                        <div class="flex space-x-2">
+                            <button onclick="markManual(${s.id}, 'Check-In')" class="px-4 py-2 text-xs font-bold rounded-xl transition ${s.has_in ? 'bg-emerald-100 text-emerald-800 cursor-not-allowed' : 'bg-zinc-100 hover:bg-emerald-50 text-zinc-700 hover:text-emerald-700'}" ${s.has_in ? 'disabled' : ''}>
+                                ${s.has_in ? 'Morning In ✓' : 'Mark In'}
+                            </button>
+                            <button onclick="markManual(${s.id}, 'Check-Out')" class="px-4 py-2 text-xs font-bold rounded-xl transition ${s.has_out ? 'bg-amber-100 text-amber-800 cursor-not-allowed' : 'bg-zinc-100 hover:bg-amber-50 text-zinc-700 hover:text-amber-700'}" ${s.has_out ? 'disabled' : ''}>
+                                ${s.has_out ? 'Evening Out ✓' : 'Mark Out'}
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+                document.getElementById('roster-list').innerHTML = html;
+            } catch (e) { showToast("Error loading roster", "error"); }
+        }
+
+        async function markManual(studentId, sessionType) {
+            try {
+                const res = await fetch(`${API_URL}/teacher/mark`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ student_id: studentId, session_type: sessionType })
+                });
+                if(res.ok) {
+                    showToast(`Marked ${sessionType} manually`);
+                    loadTeacherRoster();
+                }
+            } catch (e) { showToast("Error marking attendance", "error"); }
+        }
+
+        async function loadParentDashboard() {
+            try {
+                const parentId = currentUser.id; 
+                const res = await fetch(`${API_URL}/parent/${parentId}/dashboard`);
+                const data = await res.json();
+                
+                let badgeStyle = "bg-zinc-100 text-zinc-700 border-zinc-300";
+                if(data.status.includes("In Class")) badgeStyle = "bg-emerald-100 text-emerald-800 border-emerald-300";
+                if(data.status.includes("Dismissed")) badgeStyle = "bg-amber-100 text-amber-800 border-amber-300";
+
+                const timelineHtml = data.timeline.map(t => `
+                    <div class="relative pl-6 pb-6 border-l-2 border-emerald-200 last:border-0 last:pb-0">
+                        <div class="absolute -left-[9px] top-0 w-4 h-4 bg-emerald-600 rounded-full border-4 border-white"></div>
+                        <p class="text-zinc-900 font-semibold text-sm">${t.msg}</p>
+                        <p class="text-[10px] text-zinc-400 font-medium mt-0.5">${t.time}</p>
+                    </div>
+                `).join('') || '<p class="text-zinc-400 text-xs">No recent activity logs recorded today.</p>';
+
+                document.getElementById('parent-content').innerHTML = `
+                    <div class="bg-white p-8 rounded-3xl shadow-sm border border-zinc-200/80 text-center mb-6">
+                        <h2 class="text-3xl font-extrabold text-zinc-900 mb-2">${data.student_name}</h2>
+                        <div class="inline-block mt-3 px-6 py-2 rounded-full border text-sm font-bold shadow-sm ${badgeStyle}">
+                            ${data.status}
+                        </div>
+                    </div>
+                    
+                    <div class="bg-white p-8 rounded-3xl shadow-sm border border-zinc-200/80">
+                        <h3 class="text-lg font-bold text-zinc-900 mb-6">Real-Time Parent Timeline</h3>
+                        <div class="ml-2 space-y-2">${timelineHtml}</div>
+                    </div>
+                `;
+            } catch (e) { 
+                document.getElementById('parent-content').innerHTML = `<p class="text-rose-500 font-medium text-xs">Error loading parent dashboard timeline.</p>`;
+            }
+        }
+    </script>
+</body>
+</html>
