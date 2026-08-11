@@ -1,1 +1,10 @@
-STREAMING_CHUNK:Listing Python backend dependencies...fastapi0.111.0 uvicorn0.30.1 sqlalchemy2.0.30 pydantic2.7.4 numpy1.26.4 pandas2.2.2 openpyxl3.1.2 twilio9.0.0 opencv-python-headless4.9.0.80 face-recognition1.3.0
+fastapi==0.111.0
+uvicorn==0.30.1
+sqlalchemy==2.0.30
+pydantic==2.7.4
+numpy==1.26.4
+pandas==2.2.2
+openpyxl==3.1.2
+twilio==9.0.0
+opencv-python-headless==4.9.0.80
+face-recognition==1.3.0
