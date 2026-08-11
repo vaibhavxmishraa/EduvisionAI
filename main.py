@@ -1,442 +1,1226 @@
 import os
 import json
 import base64
-import asyncio
-from datetime import datetime, date, time
-from contextlib import asynccontextmanager
+from datetime import datetime
+from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, Form, Depends, HTTPException, WebSocket, BackgroundTasks
-from fastapi.responses import StreamingResponse, FileResponse
+import cv2
+import numpy as np
+import face_recognition
+import pandas as pd
+
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, Date, DateTime, Text
+
+from sqlalchemy import (
+    create_engine,
+    Column,
+    Integer,
+    String,
+    Boolean,
+    Date,
+    DateTime,
+    Text,
+)
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
-# Check computer vision dependencies
-HAS_CV = False
-try:
-    import cv2
-    import numpy as np
-    import face_recognition
-    HAS_CV = True
-    print("✅ Hardware & AI Libraries (OpenCV, Face_Recognition) loaded successfully.")
-except ImportError:
-    print("⚠️ WARNING: cv2 or face_recognition not found. Running in SIMULATION MODE.")
 
-# Fallback for Pandas (Excel Export)
-try:
-    import pandas as pd
-    HAS_PANDAS = True
-except ImportError:
-    HAS_PANDAS = False
-    print("⚠️ WARNING: pandas not found. Excel export will return JSON fallback.")
+# ============================================================
+# 1. PATHS & DATABASE
+# ============================================================
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./eduvision.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+BASE_DIR = Path(__file__).resolve().parent
+
+DATA_DIR = Path(
+    os.getenv(
+        "DATA_DIR",
+        str(BASE_DIR / "data")
+    )
+)
+
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+DB_PATH = DATA_DIR / "eduvision.db"
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    f"sqlite:///{DB_PATH}"
+)
+
+# Render/Postgres compatibility
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgres://",
+        "postgresql://",
+        1
+    )
+
+connect_args = {}
+
+if DATABASE_URL.startswith("sqlite"):
+    connect_args = {
+        "check_same_thread": False
+    }
+
+engine = create_engine(
+    DATABASE_URL,
+    connect_args=connect_args,
+    pool_pre_ping=True
+)
+
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine
+)
+
 Base = declarative_base()
+
+
+# ============================================================
+# 2. DATABASE MODELS
+# ============================================================
 
 class User(Base):
     __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    password = Column(String)
-    role = Column(String) # Admin, Teacher, Parent
-    phone_number = Column(String)
+
+    id = Column(
+        Integer,
+        primary_key=True
+    )
+
+    username = Column(
+        String,
+        unique=True,
+        index=True,
+        nullable=False
+    )
+
+    password = Column(
+        String,
+        nullable=False
+    )
+
+    role = Column(
+        String,
+        nullable=False
+    )
+
+    phone_number = Column(
+        String,
+        nullable=True
+    )
+
 
 class Student(Base):
     __tablename__ = "students"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, index=True)
-    roll_number = Column(String, unique=True, index=True)
-    class_section = Column(String)
-    parent_id = Column(Integer)
-    face_encodings = Column(Text) # JSON stringified list of vectors
+
+    id = Column(
+        Integer,
+        primary_key=True
+    )
+
+    name = Column(
+        String,
+        index=True,
+        nullable=False
+    )
+
+    roll_number = Column(
+        String,
+        unique=True,
+        index=True,
+        nullable=False
+    )
+
+    class_section = Column(
+        String,
+        nullable=False
+    )
+
+    parent_id = Column(
+        Integer,
+        nullable=True
+    )
+
+    # Multiple face samples can be stored here.
+    face_encodings = Column(
+        Text,
+        default="[]"
+    )
+
 
 class Attendance(Base):
     __tablename__ = "attendance"
-    id = Column(Integer, primary_key=True, index=True)
-    student_id = Column(Integer)
-    date = Column(Date)
-    timestamp = Column(DateTime)
-    session_type = Column(String) # 'Check-In' or 'Check-Out'
-    status = Column(String) # 'Present', 'Absent', 'Manual Override'
-    marked_by = Column(String) # 'CCTV' or 'Teacher'
+
+    id = Column(
+        Integer,
+        primary_key=True
+    )
+
+    student_id = Column(
+        Integer,
+        nullable=False
+    )
+
+    date = Column(
+        Date,
+        nullable=False
+    )
+
+    timestamp = Column(
+        DateTime,
+        nullable=False
+    )
+
+    session_type = Column(
+        String,
+        nullable=False
+    )
+
+    status = Column(
+        String,
+        nullable=False
+    )
+
+    marked_by = Column(
+        String,
+        nullable=False
+    )
+
 
 class Notification(Base):
     __tablename__ = "notifications"
-    id = Column(Integer, primary_key=True, index=True)
-    parent_id = Column(Integer)
-    student_id = Column(Integer)
-    message = Column(String)
-    timestamp = Column(DateTime, default=datetime.now)
-    is_read = Column(Boolean, default=False)
 
+    id = Column(
+        Integer,
+        primary_key=True
+    )
+
+    parent_id = Column(
+        Integer,
+        nullable=True
+    )
+
+    student_id = Column(
+        Integer,
+        nullable=True
+    )
+
+    message = Column(
+        String,
+        nullable=False
+    )
+
+    timestamp = Column(
+        DateTime,
+        default=datetime.now
+    )
+
+    is_read = Column(
+        Boolean,
+        default=False
+    )
+
+
+# Create tables
 Base.metadata.create_all(bind=engine)
+
+
+# ============================================================
+# 3. DATABASE SESSION
+# ============================================================
 
 def get_db():
     db = SessionLocal()
+
     try:
         yield db
+
     finally:
         db.close()
 
-def init_mock_data():
+
+# ============================================================
+# 4. DEMO DATA
+# ============================================================
+
+def init_demo_data():
+
     db = SessionLocal()
-    if db.query(User).count() == 0:
-        print("🌱 Seeding initial mock data for EduvisionAI...")
-        db.add_all([
-            User(username="admin", password="password", role="Admin", phone_number="1234567890"),
-            User(username="teacher", password="password", role="Teacher", phone_number="0987654321"),
-            User(username="parent", password="password", role="Parent", phone_number="+15551234567")
-        ])
-        db.commit()
-        
-        parent_user = db.query(User).filter(User.username == "parent").first()
-        db.add(Student(
-            name="Rahul Sharma", 
-            roll_number="CS-101", 
-            class_section="10-A", 
-            parent_id=parent_user.id,
-            face_encodings="[]"
-        ))
-        db.commit()
-        print("✅ Seed completed.")
-    db.close()
 
-init_mock_data()
+    try:
 
-app = FastAPI(title="EduvisionAI API", version="1.0")
+        if db.query(User).count() == 0:
+
+            admin = User(
+                username="admin",
+                password="password",
+                role="Admin",
+                phone_number=""
+            )
+
+            teacher = User(
+                username="teacher",
+                password="password",
+                role="Teacher",
+                phone_number=""
+            )
+
+            parent = User(
+                username="parent",
+                password="password",
+                role="Parent",
+                phone_number=""
+            )
+
+            db.add_all([
+                admin,
+                teacher,
+                parent
+            ])
+
+            db.commit()
+
+            db.refresh(parent)
+
+            demo_student = Student(
+                name="Rahul Sharma",
+                roll_number="CS-101",
+                class_section="10-A",
+                parent_id=parent.id,
+                face_encodings="[]"
+            )
+
+            db.add(demo_student)
+
+            db.commit()
+
+    finally:
+
+        db.close()
+
+
+init_demo_data()
+
+
+# ============================================================
+# 5. FASTAPI APP
+# ============================================================
+
+app = FastAPI(
+    title="EduvisionAI",
+    description="Smart Multi-Face AI Attendance System",
+    version="2.0.0"
+)
+
+
+# ============================================================
+# 6. CORS
+# ============================================================
 
 app.add_middleware(
     CORSMiddleware,
+
     allow_origins=["*"],
+
     allow_credentials=True,
+
     allow_methods=["*"],
+
     allow_headers=["*"],
 )
 
-def send_sms_alert(phone_number: str, message: str):
-    try:
-        from twilio.rest import Client
-        TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID", "mock_sid")
-        TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "mock_token")
-        TWILIO_PHONE = os.getenv("TWILIO_PHONE_NUMBER", "+1234567890")
-        
-        if TWILIO_SID == "mock_sid":
-            print(f"📱 [TWILIO MOCK SIMULATION] SMS to {phone_number}: {message}")
-            return
-            
-        client = Client(TWILIO_SID, TWILIO_TOKEN)
-        msg = client.messages.create(
-            body=message,
-            from_=TWILIO_PHONE,
-            to=phone_number
-        )
-        print(f"✅ Real SMS Sent: {msg.sid}")
-    except Exception as e:
-        print(f"⚠️ Twilio Error: {e}")
 
-camera_active = False
-
-def process_attendance(student_id: int, db: Session):
-    now = datetime.now()
-    current_date = now.date()
-    
-    # Morning Check-In (< 12:00) vs Evening Check-Out (>= 12:00)
-    session_type = "Check-In" if now.hour < 12 else "Check-Out"
-    
-    existing = db.query(Attendance).filter(
-        Attendance.student_id == student_id,
-        Attendance.date == current_date,
-        Attendance.session_type == session_type
-    ).first()
-    
-    if existing:
-        return None
-        
-    student = db.query(Student).filter(Student.id == student_id).first()
-    if not student:
-        return None
-
-    new_log = Attendance(
-        student_id=student_id,
-        date=current_date,
-        timestamp=now,
-        session_type=session_type,
-        status="Present",
-        marked_by="CCTV"
-    )
-    db.add(new_log)
-    
-    time_str = now.strftime("%I:%M %p")
-    action_str = "arrived at school" if session_type == "Check-In" else "left school"
-    msg = f"EduvisionAI Alert: Your child {student.name} has {action_str} at {time_str}."
-    
-    notif = Notification(
-        parent_id=student.parent_id,
-        student_id=student_id,
-        message=msg,
-        timestamp=now
-    )
-    db.add(notif)
-    db.commit()
-    
-    parent = db.query(User).filter(User.id == student.parent_id).first()
-    if parent and parent.phone_number:
-        send_sms_alert(parent.phone_number, msg)
-        
-    return {"student": student.name, "session": session_type, "time": time_str}
-
-def generate_cctv_frames():
-    global camera_active
-    camera_active = True
-    
-    if not HAS_CV:
-        while camera_active:
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + b'' + b'\r\n')
-            import time; time.sleep(1)
-        return
-
-    cap = cv2.VideoCapture(0)
-    db = SessionLocal()
-    
-    known_face_encodings = []
-    known_face_ids = []
-    known_face_names = []
-    students = db.query(Student).all()
-    for s in students:
-        encs = json.loads(s.face_encodings)
-        if len(encs) > 0:
-            known_face_encodings.append(np.array(encs[0]))
-            known_face_ids.append(s.id)
-            known_face_names.append(s.name)
-
-    frame_count = 0
-    face_locations = []
-    face_names = []
-    
-    while camera_active:
-        success, frame = cap.read()
-        if not success:
-            break
-            
-        if frame_count % 3 == 0 and len(known_face_encodings) > 0:
-            small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
-            rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
-            
-            face_locations = face_recognition.face_locations(rgb_small_frame, model="hog")
-            face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
-            
-            face_names = []
-            detected_students_this_frame = []
-
-            for encoding in face_encodings:
-                matches = face_recognition.compare_faces(known_face_encodings, encoding, tolerance=0.45)
-                name = "Unknown"
-                
-                if True in matches:
-                    face_distances = face_recognition.face_distance(known_face_encodings, encoding)
-                    best_match_index = np.argmin(face_distances)
-                    if matches[best_match_index]:
-                        student_id = known_face_ids[best_match_index]
-                        name = known_face_names[best_match_index]
-                        
-                        res = process_attendance(student_id, db)
-                        if res:
-                            detected_students_this_frame.append(res['student'])
-                
-                face_names.append(name)
-
-            if detected_students_this_frame:
-                print(f"🟢 REAL-WORLD CLASS BATCH DETECTED ({len(detected_students_this_frame)} students): {', '.join(detected_students_this_frame)}")
-
-        for (top, right, bottom, left), name in zip(face_locations, face_names):
-            top *= 2
-            right *= 2
-            bottom *= 2
-            left *= 2
-
-            color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
-            cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
-            cv2.rectangle(frame, (left, bottom - 30), (right, bottom), color, cv2.FILLED)
-            font = cv2.FONT_HERSHEY_DUPLEX
-            cv2.putText(frame, name, (left + 6, bottom - 6), font, 0.6, (255, 255, 255), 1)
-
-        frame_count += 1
-        
-        ret, buffer = cv2.imencode('.jpg', frame)
-        frame_bytes = buffer.tobytes()
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-               
-    cap.release()
-    db.close()
+# ============================================================
+# 7. REQUEST MODELS
+# ============================================================
 
 class LoginData(BaseModel):
+
     username: str
+
     password: str
 
-@app.post("/api/auth/login")
-def login(data: LoginData, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == data.username, User.password == data.password).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    return {"id": user.id, "role": user.role, "username": user.username}
-
-@app.get("/api/camera/stream")
-def cctv_stream():
-    return StreamingResponse(generate_cctv_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 class EnrollRequest(BaseModel):
+
     student_id: int
+
     image_base64: str
 
-@app.post("/api/admin/enroll")
-def enroll_face(data: EnrollRequest, db: Session = Depends(get_db)):
-    student = db.query(Student).filter(Student.id == data.student_id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student not found")
-        
-    if not HAS_CV:
-        student.face_encodings = json.dumps([[0.1, 0.2, 0.3]])
-        db.commit()
-        return {"msg": "Simulation mode: Face vector saved successfully."}
-        
-    try:
-        img_str = data.image_base64.split(",")[1] if "," in data.image_base64 else data.image_base64
-        img_data = base64.b64decode(img_str)
-        nparr = np.frombuffer(img_data, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        
-        encodings = face_recognition.face_encodings(rgb_img)
-        if len(encodings) == 0:
-            raise HTTPException(status_code=400, detail="No face detected in capture.")
-            
-        current_encs = json.loads(student.face_encodings)
-        current_encs.append(encodings[0].tolist())
-        student.face_encodings = json.dumps(current_encs)
-        db.commit()
-        return {"msg": "Face successfully enrolled into vector database."}
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
 
-@app.get("/api/attendance/recent")
-def get_recent_attendance(db: Session = Depends(get_db)):
-    today = datetime.now().date()
-    logs = db.query(Attendance, Student).join(Student, Attendance.student_id == Student.id)\
-             .filter(Attendance.date == today)\
-             .order_by(Attendance.timestamp.desc()).limit(5).all()
-             
-    result = []
-    for att, stu in logs:
-        result.append({
-            "name": stu.name,
-            "session": att.session_type,
-            "time": att.timestamp.strftime("%I:%M %p")
-        })
-    return result
+class FrameRequest(BaseModel):
 
-@app.get("/api/parent/{parent_id}/dashboard")
-def get_parent_dashboard(parent_id: int, db: Session = Depends(get_db)):
-    student = db.query(Student).filter(Student.parent_id == parent_id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Child record not found")
-        
-    today = datetime.now().date()
-    logs = db.query(Attendance).filter(Attendance.student_id == student.id, Attendance.date == today).all()
-    
-    status = "🏡 Not Arrived Yet"
-    has_in = any(l.session_type == "Check-In" for l in logs)
-    has_out = any(l.session_type == "Check-Out" for l in logs)
-    
-    if has_in and not has_out:
-        status = "🎒 In Class Now"
-    elif has_in and has_out:
-        status = "🚌 Dismissed"
-        
-    notifications = db.query(Notification).filter(Notification.parent_id == parent_id)\
-                      .order_by(Notification.timestamp.desc()).limit(10).all()
-                      
-    return {
-        "student_name": student.name,
-        "status": status,
-        "timeline": [{"msg": n.message, "time": n.timestamp.strftime("%Y-%m-%d %I:%M %p")} for n in notifications]
-    }
+    image_base64: str
 
-@app.get("/api/teacher/students")
-def get_teacher_students(db: Session = Depends(get_db)):
-    students = db.query(Student).all()
-    today = datetime.now().date()
-    result = []
-    for s in students:
-        att = db.query(Attendance).filter(Attendance.student_id == s.id, Attendance.date == today).all()
-        result.append({
-            "id": s.id,
-            "name": s.name,
-            "roll": s.roll_number,
-            "class": s.class_section,
-            "has_in": any(l.session_type == "Check-In" for l in att),
-            "has_out": any(l.session_type == "Check-Out" for l in att)
-        })
-    return result
 
 class ManualAttendance(BaseModel):
+
     student_id: int
+
     session_type: str
 
-@app.post("/api/teacher/mark")
-def mark_manual(data: ManualAttendance, db: Session = Depends(get_db)):
+
+# ============================================================
+# 8. IMAGE DECODER
+# ============================================================
+
+def decode_image(data_url: str):
+
+    """
+    Converts browser base64 image
+    into OpenCV image.
+    """
+
+    if "," in data_url:
+
+        raw = data_url.split(",", 1)[1]
+
+    else:
+
+        raw = data_url
+
+    try:
+
+        image_bytes = base64.b64decode(raw)
+
+    except Exception:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid base64 image."
+        )
+
+    image_array = np.frombuffer(
+        image_bytes,
+        dtype=np.uint8
+    )
+
+    image = cv2.imdecode(
+        image_array,
+        cv2.IMREAD_COLOR
+    )
+
+    if image is None:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid image."
+        )
+
+    return image
+
+
+# ============================================================
+# 9. LOAD KNOWN FACE ENCODINGS
+# ============================================================
+
+def get_known_faces(db: Session):
+
+    known_encodings = []
+
+    student_ids = []
+
+    student_names = []
+
+    students = db.query(Student).all()
+
+    for student in students:
+
+        try:
+
+            saved_encodings = json.loads(
+                student.face_encodings or "[]"
+            )
+
+        except Exception:
+
+            continue
+
+        for encoding in saved_encodings:
+
+            vector = np.asarray(
+                encoding,
+                dtype=np.float64
+            )
+
+            if vector.shape != (128,):
+
+                continue
+
+            known_encodings.append(vector)
+
+            student_ids.append(
+                student.id
+            )
+
+            student_names.append(
+                student.name
+            )
+
+    return (
+        known_encodings,
+        student_ids,
+        student_names
+    )
+
+
+# ============================================================
+# 10. ATTENDANCE ENGINE
+# ============================================================
+
+def mark_attendance(
+    student_id: int,
+    db: Session,
+    marked_by="CCTV"
+):
+
     now = datetime.now()
-    existing = db.query(Attendance).filter(
-        Attendance.student_id == data.student_id,
+
+    # Before 12 PM = Check-In
+    # 12 PM onwards = Check-Out
+
+    session_type = (
+        "Check-In"
+        if now.hour < 12
+        else "Check-Out"
+    )
+
+    # Prevent duplicate attendance
+    existing = db.query(
+        Attendance
+    ).filter(
+        Attendance.student_id == student_id,
         Attendance.date == now.date(),
-        Attendance.session_type == data.session_type
+        Attendance.session_type == session_type
     ).first()
-    
+
     if existing:
-        return {"msg": "Already marked"}
-        
-    db.add(Attendance(
-        student_id=data.student_id,
+
+        return None
+
+    student = db.query(
+        Student
+    ).filter(
+        Student.id == student_id
+    ).first()
+
+    if not student:
+
+        return None
+
+    attendance = Attendance(
+        student_id=student_id,
         date=now.date(),
         timestamp=now,
-        session_type=data.session_type,
-        status="Manual Override",
-        marked_by="Teacher"
-    ))
+        session_type=session_type,
+        status=(
+            "Present"
+            if marked_by == "CCTV"
+            else "Manual Override"
+        ),
+        marked_by=marked_by
+    )
+
+    db.add(attendance)
+
+    # Parent notification record
+    if student.parent_id:
+
+        notification = Notification(
+            parent_id=student.parent_id,
+            student_id=student.id,
+            message=(
+                f"EduvisionAI: "
+                f"{student.name} "
+                f"{session_type.lower()} "
+                f"recorded at "
+                f"{now.strftime('%I:%M %p')}."
+            ),
+            timestamp=now
+        )
+
+        db.add(notification)
+
     db.commit()
-    return {"msg": "Marked successfully"}
+
+    return {
+        "student_id": student.id,
+        "name": student.name,
+        "session": session_type,
+        "time": now.strftime("%I:%M %p")
+    }
+
+
+# ============================================================
+# 11. HOME PAGE
+# ============================================================
+
+@app.get("/")
+def home():
+
+    return FileResponse(
+        BASE_DIR / "index.html"
+    )
+
+
+# ============================================================
+# 12. HEALTH CHECK
+# ============================================================
+
+@app.get("/health")
+def health():
+
+    return {
+        "status": "ok",
+        "service": "EduvisionAI",
+        "face_recognition": True,
+        "multi_face": True
+    }
+
+
+# ============================================================
+# 13. LOGIN
+# ============================================================
+
+@app.post("/api/auth/login")
+def login(
+    data: LoginData,
+    db: Session = Depends(get_db)
+):
+
+    user = db.query(
+        User
+    ).filter(
+        User.username == data.username,
+        User.password == data.password
+    ).first()
+
+    if not user:
+
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid credentials"
+        )
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "role": user.role
+    }
+
+
+# ============================================================
+# 14. FACE ENROLLMENT
+# ============================================================
+
+@app.post("/api/admin/enroll")
+def enroll_face(
+    data: EnrollRequest,
+    db: Session = Depends(get_db)
+):
+
+    student = db.query(
+        Student
+    ).filter(
+        Student.id == data.student_id
+    ).first()
+
+    if not student:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Student not found"
+        )
+
+    image = decode_image(
+        data.image_base64
+    )
+
+    # BGR -> RGB
+    rgb_image = cv2.cvtColor(
+        image,
+        cv2.COLOR_BGR2RGB
+    )
+
+    # Detect all faces
+    face_locations = (
+        face_recognition.face_locations(
+            rgb_image,
+            model="hog"
+        )
+    )
+
+    # Enrollment must contain exactly one face
+    if len(face_locations) == 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="No face detected."
+        )
+
+    if len(face_locations) > 1:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Multiple faces detected. "
+                "Only one student should be "
+                "visible during enrollment."
+            )
+        )
+
+    encodings = (
+        face_recognition.face_encodings(
+            rgb_image,
+            face_locations
+        )
+    )
+
+    if not encodings:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Could not generate face encoding."
+        )
+
+    new_encoding = encodings[0].tolist()
+
+    try:
+
+        current_encodings = json.loads(
+            student.face_encodings or "[]"
+        )
+
+    except Exception:
+
+        current_encodings = []
+
+    # Keep maximum 3 samples
+    current_encodings.append(
+        new_encoding
+    )
+
+    current_encodings = current_encodings[-3:]
+
+    student.face_encodings = json.dumps(
+        current_encodings
+    )
+
+    db.commit()
+
+    return {
+        "success": True,
+        "student": student.name,
+        "samples": len(current_encodings),
+        "message": (
+            f"Face enrolled successfully "
+            f"for {student.name}"
+        )
+    }
+
+
+# ============================================================
+# 15. MULTI-FACE RECOGNITION
+# ============================================================
+
+@app.post("/api/camera/frame")
+def process_frame(
+    data: FrameRequest,
+    db: Session = Depends(get_db)
+):
+
+    image = decode_image(
+        data.image_base64
+    )
+
+    rgb_image = cv2.cvtColor(
+        image,
+        cv2.COLOR_BGR2RGB
+    )
+
+    # --------------------------------------------------------
+    # Detect ALL faces in current frame
+    # --------------------------------------------------------
+
+    face_locations = (
+        face_recognition.face_locations(
+            rgb_image,
+            model="hog"
+        )
+    )
+
+    face_encodings = (
+        face_recognition.face_encodings(
+            rgb_image,
+            face_locations
+        )
+    )
+
+    # --------------------------------------------------------
+    # Load enrolled students
+    # --------------------------------------------------------
+
+    (
+        known_encodings,
+        student_ids,
+        student_names
+    ) = get_known_faces(db)
+
+    detections = []
+
+    newly_marked = []
+
+    # --------------------------------------------------------
+    # Process every face independently
+    # --------------------------------------------------------
+
+    for location, face_encoding in zip(
+        face_locations,
+        face_encodings
+    ):
+
+        top, right, bottom, left = location
+
+        name = "Unknown"
+
+        student_id = None
+
+        distance = None
+
+        # ----------------------------------------------------
+        # Match against ALL enrolled faces
+        # ----------------------------------------------------
+
+        if known_encodings:
+
+            distances = (
+                face_recognition.face_distance(
+                    known_encodings,
+                    face_encoding
+                )
+            )
+
+            best_index = int(
+                np.argmin(distances)
+            )
+
+            best_distance = float(
+                distances[best_index]
+            )
+
+            distance = best_distance
+
+            # Strict threshold
+            MATCH_THRESHOLD = 0.48
+
+            if best_distance <= MATCH_THRESHOLD:
+
+                student_id = (
+                    student_ids[best_index]
+                )
+
+                name = (
+                    student_names[best_index]
+                )
+
+                # ------------------------------------------------
+                # Attendance
+                # ------------------------------------------------
+
+                attendance = mark_attendance(
+                    student_id,
+                    db,
+                    marked_by="CCTV"
+                )
+
+                if attendance:
+
+                    newly_marked.append(
+                        attendance
+                    )
+
+        detections.append({
+
+            "name": name,
+
+            "student_id": student_id,
+
+            "distance": (
+                round(distance, 4)
+                if distance is not None
+                else None
+            ),
+
+            "box": {
+
+                "top": top,
+
+                "right": right,
+
+                "bottom": bottom,
+
+                "left": left
+            }
+        })
+
+    return {
+
+        "faces": detections,
+
+        "attendance": newly_marked,
+
+        "face_count": len(detections)
+    }
+
+
+# ============================================================
+# 16. RECENT ATTENDANCE
+# ============================================================
+
+@app.get("/api/attendance/recent")
+def recent_attendance(
+    db: Session = Depends(get_db)
+):
+
+    today = datetime.now().date()
+
+    rows = (
+        db.query(
+            Attendance,
+            Student
+        )
+        .join(
+            Student,
+            Attendance.student_id == Student.id
+        )
+        .filter(
+            Attendance.date == today
+        )
+        .order_by(
+            Attendance.timestamp.desc()
+        )
+        .limit(30)
+        .all()
+    )
+
+    return [
+
+        {
+            "name": student.name,
+
+            "session": attendance.session_type,
+
+            "time": attendance.timestamp.strftime(
+                "%I:%M %p"
+            )
+        }
+
+        for attendance, student in rows
+    ]
+
+
+# ============================================================
+# 17. TEACHER STUDENT ROSTER
+# ============================================================
+
+@app.get("/api/teacher/students")
+def teacher_students(
+    db: Session = Depends(get_db)
+):
+
+    students = db.query(
+        Student
+    ).all()
+
+    today = datetime.now().date()
+
+    result = []
+
+    for student in students:
+
+        logs = db.query(
+            Attendance
+        ).filter(
+            Attendance.student_id == student.id,
+            Attendance.date == today
+        ).all()
+
+        has_check_in = any(
+            log.session_type == "Check-In"
+            for log in logs
+        )
+
+        has_check_out = any(
+            log.session_type == "Check-Out"
+            for log in logs
+        )
+
+        result.append({
+
+            "id": student.id,
+
+            "name": student.name,
+
+            "roll": student.roll_number,
+
+            "class": student.class_section,
+
+            "has_in": has_check_in,
+
+            "has_out": has_check_out
+        })
+
+    return result
+
+
+# ============================================================
+# 18. MANUAL ATTENDANCE
+# ============================================================
+
+@app.post("/api/teacher/mark")
+def teacher_mark(
+    data: ManualAttendance,
+    db: Session = Depends(get_db)
+):
+
+    if data.session_type not in {
+        "Check-In",
+        "Check-Out"
+    }:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid session type."
+        )
+
+    result = mark_attendance(
+        data.student_id,
+        db,
+        marked_by="Teacher"
+    )
+
+    if result:
+
+        return result
+
+    return {
+        "success": True,
+        "message": "Attendance already marked."
+    }
+
+
+# ============================================================
+# 19. PARENT DASHBOARD
+# ============================================================
+
+@app.get("/api/parent/{parent_id}/dashboard")
+def parent_dashboard(
+    parent_id: int,
+    db: Session = Depends(get_db)
+):
+
+    student = db.query(
+        Student
+    ).filter(
+        Student.parent_id == parent_id
+    ).first()
+
+    if not student:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Child record not found."
+        )
+
+    today = datetime.now().date()
+
+    logs = db.query(
+        Attendance
+    ).filter(
+        Attendance.student_id == student.id,
+        Attendance.date == today
+    ).all()
+
+    has_check_in = any(
+        log.session_type == "Check-In"
+        for log in logs
+    )
+
+    has_check_out = any(
+        log.session_type == "Check-Out"
+        for log in logs
+    )
+
+    if not has_check_in:
+
+        status = "🏡 Not Arrived Yet"
+
+    elif has_check_in and not has_check_out:
+
+        status = "🎒 In Class Now"
+
+    else:
+
+        status = "🚌 Dismissed"
+
+    notifications = (
+        db.query(Notification)
+        .filter(
+            Notification.parent_id == parent_id
+        )
+        .order_by(
+            Notification.timestamp.desc()
+        )
+        .limit(20)
+        .all()
+    )
+
+    timeline = [
+
+        {
+            "msg": notification.message,
+
+            "time": notification.timestamp.strftime(
+                "%Y-%m-%d %I:%M %p"
+            )
+        }
+
+        for notification in notifications
+    ]
+
+    return {
+
+        "student_name": student.name,
+
+        "status": status,
+
+        "timeline": timeline
+    }
+
+
+# ============================================================
+# 20. EXCEL EXPORT
+# ============================================================
 
 @app.get("/api/export")
-def export_excel(db: Session = Depends(get_db)):
-    if not HAS_PANDAS:
-        return {"msg": "Pandas not installed. Install pandas & openpyxl."}
-        
-    records = db.query(Attendance, Student).join(Student, Attendance.student_id == Student.id).all()
-    
+def export_excel(
+    db: Session = Depends(get_db)
+):
+
+    rows = (
+        db.query(
+            Attendance,
+            Student
+        )
+        .join(
+            Student,
+            Attendance.student_id == Student.id
+        )
+        .order_by(
+            Attendance.timestamp.desc()
+        )
+        .all()
+    )
+
     data = []
-    for att, stu in records:
+
+    for attendance, student in rows:
+
         data.append({
-            "Date": att.date.strftime("%Y-%m-%d"),
-            "Roll Number": stu.roll_number,
-            "Student Name": stu.name,
-            "Class": stu.class_section,
-            "Session": att.session_type,
-            "Status": att.status,
-            "Time": att.timestamp.strftime("%I:%M %p"),
-            "Marked By": att.marked_by
+
+            "Date":
+                attendance.date.strftime(
+                    "%Y-%m-%d"
+                ),
+
+            "Roll Number":
+                student.roll_number,
+
+            "Student Name":
+                student.name,
+
+            "Class":
+                student.class_section,
+
+            "Session":
+                attendance.session_type,
+
+            "Status":
+                attendance.status,
+
+            "Time":
+                attendance.timestamp.strftime(
+                    "%I:%M %p"
+                ),
+
+            "Marked By":
+                attendance.marked_by
         })
-        
-    df = pd.DataFrame(data)
-    file_path = "attendance_report.xlsx"
-    df.to_excel(file_path, index=False)
-    
-    return FileResponse(file_path, filename="EduvisionAI_Report.xlsx")
+
+    report_path = (
+        DATA_DIR /
+        "attendance_report.xlsx"
+    )
+
+    dataframe = pd.DataFrame(data)
+
+    dataframe.to_excel(
+        report_path,
+        index=False
+    )
+
+    return FileResponse(
+        report_path,
+        filename="EduvisionAI_Attendance_Report.xlsx",
+        media_type=(
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet"
+        )
+    )
+
+
+# ============================================================
+# 21. OLD CCTV ENDPOINT
+# ============================================================
+
+@app.get("/api/camera/stream")
+def old_camera_stream():
+
+    raise HTTPException(
+
+        status_code=410,
+
+        detail=(
+            "Server webcam streaming has been removed. "
+            "Use browser camera frames through "
+            "/api/camera/frame."
+        )
+    )
+
+
+# ============================================================
+# 22. LOCAL SERVER
+# ============================================================
 
 if __name__ == "__main__":
+
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    uvicorn.run(
+
+        app,
+
+        host="0.0.0.0",
+
+        port=int(
+            os.getenv(
+                "PORT",
+                "8000"
+            )
+        )
+    )
